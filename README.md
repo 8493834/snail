@@ -1,1 +1,1 @@
-# snail
+# Snail app (Windows + Android)

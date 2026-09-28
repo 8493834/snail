@@ -1,0 +1,15 @@
+#ss# copyright snail coding development inc. #
+#ss# ver 1.0 ###
+
+#ss## Demo: one html block and one python block.
+Run with:  python snail.py hello.snail
+#
+
+<code lang="html en">
+<h1>Hello from Snail!</h1>
+<p>This page was made by a .snail file.</p>
+<code?>
+
+<code lang="python">
+print("Hello from the Python block!")
+<code?>

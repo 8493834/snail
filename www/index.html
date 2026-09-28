@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Snail</title>
+<style>
+  :root { --bg:#14171c; --panel:#1d2229; --line:#2c3440; --fg:#e6e9ee; --dim:#8b95a3; --accent:#6fcf97; --err:#ff7b72; }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body { display: flex; flex-direction: column; background: var(--bg); color: var(--fg);
+         font: 15px system-ui, sans-serif;
+         padding: env(safe-area-inset-top, 0px) 0 env(safe-area-inset-bottom, 0px); }
+  header { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 12px; }
+  h1 { font-size: 18px; margin: 0; }
+  #fname { color: var(--dim); font-size: 13px; margin-right: auto; }
+  button { background: var(--panel); color: var(--fg); border: 1px solid var(--line);
+           border-radius: 8px; padding: 8px 14px; font: inherit; cursor: pointer; }
+  button.run { background: var(--accent); color: #0b1a10; border: 0; font-weight: 600; }
+  main { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 8px; padding: 0 12px 12px; }
+  textarea, pre { width: 100%; margin: 0; padding: 10px; background: var(--panel); color: var(--fg);
+                  border: 1px solid var(--line); border-radius: 8px; font: 13px ui-monospace, Consolas, monospace; }
+  textarea { height: 42vh; min-height: 140px; resize: none; white-space: pre; tab-size: 2; }
+  pre { min-height: 90px; white-space: pre-wrap; }
+  #preview { display: flex; flex-direction: column; gap: 8px; }
+  #preview iframe { width: 100%; height: 240px; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
+  .err { color: var(--err); }
+  .dim { color: var(--dim); }
+</style>
+</head>
+<body>
+<header>
+  <h1>🐌 Snail</h1>
+  <span id="fname">untitled.snail</span>
+  <button id="open">Open</button>
+  <button id="check">Check</button>
+  <button id="run" class="run">Run</button>
+  <input id="file" type="file" hidden>
+</header>
+<main>
+  <textarea id="src" spellcheck="false" autocapitalize="off" autocomplete="off"></textarea>
+  <pre id="out"></pre>
+  <div id="preview"></div>
+</main>
+
+<script src="snail-core.js"></script>
+<script>
+const $ = (id) => document.getElementById(id);
+const src = $("src"), out = $("out");
+let fname = "untitled.snail";
+
+const SAMPLE = `#ss# copyright snail coding development inc. #
+#ss# ver 1.0 ###
+
+#ss## Tap Run to try this.
+Each code block runs in its own language. #
+
+<code lang="html en">
+<h1>Hello from Snail!</h1>
+<p>This page was made by a .snail file.</p>
+<code?>
+
+<code lang="js">
+console.log("Hello from the JavaScript block!");
+console.log(2 + 2);
+<code?>
+`;
+
+function save() {
+  try { localStorage.setItem("snail:src", src.value); localStorage.setItem("snail:name", fname); } catch {}
+}
+function load(name, text) {
+  fname = name; $("fname").textContent = name; src.value = text; save();
+}
+function log(text, cls) {
+  const s = document.createElement("span");
+  s.textContent = text + "\n";
+  if (cls) s.className = cls;
+  out.append(s);
+}
+function reset() { out.textContent = ""; $("preview").textContent = ""; }
+
+function parseSrc() {
+  try { return Snail.parse(src.value, fname); }
+  catch (e) {
+    if (e instanceof Snail.SnailError) { log(`${fname}: syntax error: ${e.message}`, "err"); return null; }
+    throw e;
+  }
+}
+function summary(p) {
+  log(`${fname}: ${p.kind} file, version ${p.version || "not declared"}, ${p.blocks.length} code block(s)`, "dim");
+  if (p.version) {
+    const v = p.version.split(".").map(Number), s = Snail.SUPPORTED;
+    if (v[0] > s[0] || (v[0] === s[0] && (v[1] || 0) > s[1])) log(`warning: file is version ${p.version}, this app knows ${s.join(".")}`, "err");
+  }
+}
+
+$("check").onclick = () => {
+  reset();
+  const p = parseSrc(); if (!p) return;
+  summary(p);
+  p.blocks.forEach((b, i) => log(`  block ${i + 1}: ${b.lang}${b.extras.length ? " (" + b.extras.join(" ") + ")" : ""}, line ${b.line}, ${b.body.split("\n").length} line(s)`));
+};
+
+$("run").onclick = async () => {
+  reset();
+  const p = parseSrc(); if (!p) return;
+  summary(p);
+  for (let i = 0; i < p.blocks.length; i++) {
+    const b = p.blocks[i], n = i + 1;
+    log(`[block ${n}] running ${b.lang}`);
+    let r = { ok: true, out: "" };
+    if (b.lang === "html") {
+      const f = document.createElement("iframe");
+      f.setAttribute("sandbox", "allow-scripts");
+      f.srcdoc = Snail.htmlPage(b, fname);
+      $("preview").append(f);
+      r.out = "  shown below";
+    } else if (b.lang === "js" || b.lang === "javascript") {
+      r = Snail.runJs(b.body);
+    } else if (window.snailNative) {
+      r = await window.snailNative.run(b.lang, b.body, n);
+    } else {
+      r = { ok: false, out: `'${b.lang}' blocks can't run on this device. Only html and js work on Android; use the Windows app for more.` };
+    }
+    if (r.out) log(r.out.replace(/\n$/, ""), r.ok ? "" : "err");
+    if (!r.ok) { log(`stopped: block ${n} (line ${b.line}) failed`, "err"); return; }
+  }
+};
+
+$("open").onclick = () => $("file").click();
+$("file").onchange = async (e) => {
+  const f = e.target.files[0];
+  if (f) load(f.name, await f.text());
+  e.target.value = "";
+};
+src.addEventListener("input", save);
+if (window.snailNative) window.snailNative.onOpen((f) => load(f.name, f.text));
+
+try {
+  fname = localStorage.getItem("snail:name") || fname;
+  src.value = localStorage.getItem("snail:src") ?? SAMPLE;
+} catch { src.value = SAMPLE; }
+$("fname").textContent = fname;
+</script>
+</body>
+</html>
