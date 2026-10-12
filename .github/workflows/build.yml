@@ -1,10 +1,10 @@
 name: Build Snail apps
-
+ 
 on:
   push:
     branches: [main, master]
   workflow_dispatch:
-
+ 
 jobs:
   windows:
     runs-on: windows-latest
@@ -21,7 +21,7 @@ jobs:
         with:
           name: snail-windows
           path: dist/*.exe
-
+ 
   android:
     runs-on: ubuntu-latest
     steps:
@@ -47,7 +47,7 @@ jobs:
         with:
           name: snail-android
           path: android/app/build/outputs/apk/debug/app-debug.apk
-
+ 
   linux:
     runs-on: ubuntu-latest
     steps:
@@ -63,7 +63,7 @@ jobs:
           path: |
             dist/*.AppImage
             dist/*.deb
-
+ 
   macos:
     runs-on: macos-latest
     steps:
@@ -81,7 +81,7 @@ jobs:
           path: |
             dist/*.dmg
             dist/*.zip
-
+ 
   ios:
     runs-on: macos-latest
     steps:
@@ -105,12 +105,12 @@ jobs:
       - run: npx cap sync ios
       - name: Build for the iOS Simulator (no signing needed)
         run: |
-          xcodebuild -project ios/App/App.xcodeproj -scheme App -configuration Debug \
+          xcodebuild -workspace ios/App/App.xcworkspace -scheme App -configuration Debug \
             -sdk iphonesimulator -derivedDataPath build/ios \
             CODE_SIGNING_ALLOWED=NO build
-      - name: Package an unsigned .ipa (re-sign it with your Apple ID, e.g. via Sideloadly/AltStore)
+      - name: Package an unsigned .ipa
         run: |
-          xcodebuild -project ios/App/App.xcodeproj -scheme App -configuration Release \
+          xcodebuild -workspace ios/App/App.xcworkspace -scheme App -configuration Release \
             -sdk iphoneos -derivedDataPath build/ios-device \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" build
           mkdir -p Payload && cp -r build/ios-device/Build/Products/Release-iphoneos/App.app Payload/
@@ -121,3 +121,5 @@ jobs:
           path: |
             snail-ios-unsigned.ipa
             build/ios/Build/Products/Debug-iphonesimulator/App.app
+ 
+
