@@ -2,3 +2,7 @@ node_modules/
 dist/
 android/
 _site/
+ios/
+build/ios*/
+Payload/
+*.ipa

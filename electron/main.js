@@ -1,10 +1,12 @@
-// Windows shell: opens the UI and runs java/python blocks with tools installed on the PC.
+// Desktop shell (Windows, macOS, Linux): opens the UI and runs java/python blocks with tools installed on the PC.
 const { app, BrowserWindow, ipcMain } = require("electron");
 const { execFile } = require("child_process");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
 
+let mainWin = null;
+let pendingFile = null; // macOS "open-file" can arrive before the window exists
 const SNAIL_FILE = /\.(snail|cofigsnail|configsnail)$/i;
 
 function sh(cmd, args, cwd) {
@@ -23,8 +25,10 @@ ipcMain.handle("snail:run", async (_e, lang, code, n) => {
     if (lang === "python" || lang === "py") {
       const file = path.join(dir, `block${n}.py`);
       fs.writeFileSync(file, code);
-      let r = await sh("python", [file]);
-      if (r.missing) r = await sh("py", [file]);
+      // Windows: python / py launcher. macOS + Linux: python3 first.
+      const tries = process.platform === "win32" ? ["python", "py"] : ["python3", "python"];
+      let r = { missing: true };
+      for (const cmd of tries) { r = await sh(cmd, [file]); if (!r.missing) break; }
       return r.missing ? { ok: false, out: "Python was not found. Install it from python.org." } : r;
     }
     if (lang === "java") {
@@ -49,6 +53,18 @@ ipcMain.handle("snail:run", async (_e, lang, code, n) => {
   }
 });
 
+function sendFile(path_) {
+  try {
+    const f = { name: path.basename(path_), text: fs.readFileSync(path_, "utf8") };
+    if (mainWin && !mainWin.webContents.isLoading()) mainWin.webContents.send("snail:open", f);
+    else if (mainWin) mainWin.webContents.once("did-finish-load", () => mainWin.webContents.send("snail:open", f));
+    else pendingFile = path_;
+  } catch {}
+}
+
+// macOS: double-clicking a .snail file (or dropping it on the Dock icon) fires this, not argv.
+app.on("open-file", (e, p) => { e.preventDefault(); sendFile(p); });
+
 function createWindow() {
   const win = new BrowserWindow({
     width: 1000,
@@ -60,16 +76,18 @@ function createWindow() {
       nodeIntegration: false,
     },
   });
+  mainWin = win;
+  win.on("closed", () => { mainWin = null; });
   win.loadFile(path.join(__dirname, "..", "www", "index.html"));
 
-  // Double-clicking a .snail file passes its path as an argument.
-  const file = process.argv.slice(1).find((a) => SNAIL_FILE.test(a));
-  if (file) {
-    win.webContents.once("did-finish-load", () =>
-      win.webContents.send("snail:open", { name: path.basename(file), text: fs.readFileSync(file, "utf8") })
-    );
-  }
+  // Windows/Linux: double-clicking a .snail file passes its path as an argument.
+  const file = pendingFile || process.argv.slice(1).find((a) => SNAIL_FILE.test(a));
+  pendingFile = null;
+  if (file) sendFile(file);
 }
 
-app.whenReady().then(createWindow);
+app.whenReady().then(() => {
+  createWindow();
+  app.on("activate", () => { if (!BrowserWindow.getAllWindows().length) createWindow(); });
+});
 app.on("window-all-closed", () => app.quit());

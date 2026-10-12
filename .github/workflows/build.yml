@@ -47,3 +47,77 @@ jobs:
         with:
           name: snail-android
           path: android/app/build/outputs/apk/debug/app-debug.apk
+
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm install
+      - run: npx electron-builder --linux --publish never
+      - uses: actions/upload-artifact@v4
+        with:
+          name: snail-linux
+          path: |
+            dist/*.AppImage
+            dist/*.deb
+
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm install
+      - run: npx electron-builder --mac --publish never
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: snail-macos
+          path: |
+            dist/*.dmg
+            dist/*.zip
+
+  ios:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm install
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+      - name: Bundle the Python runtime (Pyodide) into the app
+        run: |
+          cp -r node_modules/pyodide www/pyodide
+          test -f www/pyodide/pyodide.js || { echo "MISSING: pyodide.js"; exit 1; }
+      - run: npx cap add ios
+      - name: Let the Files app see saved .snail files
+        run: |
+          P=ios/App/App/Info.plist
+          /usr/libexec/PlistBuddy -c "Add :UIFileSharingEnabled bool true" $P
+          /usr/libexec/PlistBuddy -c "Add :LSSupportsOpeningDocumentsInPlace bool true" $P
+      - run: npx cap sync ios
+      - name: Build for the iOS Simulator (no signing needed)
+        run: |
+          xcodebuild -project ios/App/App.xcodeproj -scheme App -configuration Debug \
+            -sdk iphonesimulator -derivedDataPath build/ios \
+            CODE_SIGNING_ALLOWED=NO build
+      - name: Package an unsigned .ipa (re-sign it with your Apple ID, e.g. via Sideloadly/AltStore)
+        run: |
+          xcodebuild -project ios/App/App.xcodeproj -scheme App -configuration Release \
+            -sdk iphoneos -derivedDataPath build/ios-device \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" build
+          mkdir -p Payload && cp -r build/ios-device/Build/Products/Release-iphoneos/App.app Payload/
+          zip -qr snail-ios-unsigned.ipa Payload
+      - uses: actions/upload-artifact@v4
+        with:
+          name: snail-ios
+          path: |
+            snail-ios-unsigned.ipa
+            build/ios/Build/Products/Debug-iphonesimulator/App.app
