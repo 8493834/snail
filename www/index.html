@@ -13,7 +13,8 @@
          padding: env(safe-area-inset-top, 0px) 0 env(safe-area-inset-bottom, 0px); }
   header { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 12px; }
   h1 { font-size: 18px; margin: 0; }
-  #fname { color: var(--dim); font-size: 13px; margin-right: auto; }
+  #fname { flex: 1 1 8em; min-width: 0; background: transparent; color: var(--dim); border: 0;
+           border-bottom: 1px dashed var(--line); font: 13px ui-monospace, Consolas, monospace; padding: 4px 2px; }
   button { background: var(--panel); color: var(--fg); border: 1px solid var(--line);
            border-radius: 8px; padding: 8px 14px; font: inherit; cursor: pointer; }
   button.run { background: var(--accent); color: #0b1a10; border: 0; font-weight: 600; }
@@ -31,8 +32,9 @@
 <body>
 <header>
   <h1>🐌 Snail</h1>
-  <span id="fname">untitled.snail</span>
+  <input id="fname" value="untitled.snail" spellcheck="false" autocapitalize="off" aria-label="File name">
   <button id="open">Open</button>
+  <button id="save">Save</button>
   <button id="check">Check</button>
   <button id="run" class="run">Run</button>
   <input id="file" type="file" hidden>
@@ -46,8 +48,8 @@
 <script src="snail-core.js"></script>
 <script>
 const $ = (id) => document.getElementById(id);
-const src = $("src"), out = $("out");
-let fname = "untitled.snail";
+const src = $("src"), out = $("out"), nameEl = $("fname");
+const getName = () => nameEl.value.trim() || "untitled.snail";
 
 const SAMPLE = `#ss# copyright snail coding development inc. #
 #ss# ver 1.0 ###
@@ -66,12 +68,10 @@ console.log(2 + 2);
 <code?>
 `;
 
-function save() {
-  try { localStorage.setItem("snail:src", src.value); localStorage.setItem("snail:name", fname); } catch {}
+function persist() {
+  try { localStorage.setItem("snail:src", src.value); localStorage.setItem("snail:name", getName()); } catch {}
 }
-function load(name, text) {
-  fname = name; $("fname").textContent = name; src.value = text; save();
-}
+function load(name, text) { nameEl.value = name; src.value = text; persist(); }
 function log(text, cls) {
   const s = document.createElement("span");
   s.textContent = text + "\n";
@@ -81,17 +81,121 @@ function log(text, cls) {
 function reset() { out.textContent = ""; $("preview").textContent = ""; }
 
 function parseSrc() {
-  try { return Snail.parse(src.value, fname); }
+  try { return Snail.parse(src.value, getName()); }
   catch (e) {
-    if (e instanceof Snail.SnailError) { log(`${fname}: syntax error: ${e.message}`, "err"); return null; }
+    if (e instanceof Snail.SnailError) { log(`${getName()}: syntax error: ${e.message}`, "err"); return null; }
     throw e;
   }
 }
 function summary(p) {
-  log(`${fname}: ${p.kind} file, version ${p.version || "not declared"}, ${p.blocks.length} code block(s)`, "dim");
+  log(`${getName()}: ${p.kind} file, version ${p.version || "not declared"}, ${p.blocks.length} code block(s)`, "dim");
   if (p.version) {
     const v = p.version.split(".").map(Number), s = Snail.SUPPORTED;
     if (v[0] > s[0] || (v[0] === s[0] && (v[1] || 0) > s[1])) log(`warning: file is version ${p.version}, this app knows ${s.join(".")}`, "err");
+  }
+}
+
+// ---- Python without a PC: Pyodide (Python compiled to WebAssembly). Bundled by the builds; falls back to a CDN ----
+let pyodidePromise;
+function addScript(src) {
+  return new Promise((resolve, reject) => {
+    const el = document.createElement("script");
+    el.src = src;
+    el.onload = resolve;
+    el.onerror = () => reject(new Error("could not load " + src));
+    document.head.append(el);
+  });
+}
+const PY_CDN = "https://cdn.jsdelivr.net/pyodide/v0.27.0/full/";
+function loadPy() {
+  if (!pyodidePromise) pyodidePromise = (async () => {
+    let base = new URL("pyodide/", location.href).href;           // the copy bundled by the build
+    try { await addScript(base + "pyodide.js"); }
+    catch {
+      log("  bundled Python not found here; downloading it from the internet instead (needs a connection)...", "dim");
+      base = PY_CDN;
+      try { await addScript(base + "pyodide.js"); }
+      catch { throw new Error("couldn't load the Python runtime, either bundled with the app or from " + PY_CDN + ". Check your internet connection."); }
+    }
+    return loadPyodide({ indexURL: base });
+  })();
+  pyodidePromise.catch(() => { pyodidePromise = null; });
+  return pyodidePromise;
+}
+async function runPy(code) {
+  const buf = [];
+  try {
+    const py = await loadPy();
+    py.setStdout({ batched: (t) => buf.push(t) });
+    py.setStderr({ batched: (t) => buf.push(t) });
+    const scope = py.globals.get("dict")(); // fresh scope per block, like a separate process
+    try { await py.runPythonAsync(code, { globals: scope }); } finally { scope.destroy(); }
+    return { ok: true, out: buf.join("\n") };
+  } catch (e) {
+    buf.push(String((e && e.message) || e).trim());
+    return { ok: false, out: buf.join("\n") };
+  }
+}
+
+// ---- Java without a PC: compiled and run on a free public service (Judge0 CE). Your code is sent to it. ----
+const JAVA_SERVICE = "https://ce.judge0.com";   // change this if you host your own Judge0
+const b64 = (s) => { let t = ""; new TextEncoder().encode(s).forEach((c) => (t += String.fromCharCode(c))); return btoa(t); };
+const unb64 = (s) => (s ? new TextDecoder().decode(Uint8Array.from(atob(s), (c) => c.charCodeAt(0))) : "");
+
+// The service only runs a class called Main, so adapt the code without touching its text.
+function javaSource(code) {
+  const MAIN = /\bstatic\s+void\s+main\s*\(/;
+  const at = code.search(MAIN);
+  if (at < 0) {                       // bare statements: hoist imports, wrap the rest in main()
+    const lines = code.split("\n"), isImp = (l) => /^\s*import\s/.test(l);
+    return lines.filter(isImp).join("\n") + "\npublic class Main {\n  public static void main(String[] args) throws Exception {\n" +
+           lines.filter((l) => !isImp(l)).join("\n") + "\n  }\n}\n";
+  }
+  const before = code.slice(0, at);
+  const tops = [...before.matchAll(/^(?:public\s+)?(?:(?:final|abstract)\s+)*class\s+(\w+)/gm)];
+  const any = [...before.matchAll(/\bclass\s+(\w+)/g)];
+  const pick = tops.length ? tops[tops.length - 1] : any[any.length - 1];
+  const cls = pick ? pick[1] : "Main";
+  let src = code.replace(/^([ \t]*)public\s+((?:(?:final|abstract|strictfp)\s+)*(?:class|interface|enum|record)\b)/gm, "$1$2");
+  if (cls !== "Main") src += `\npublic class Main {\n  public static void main(String[] args) throws Exception { ${cls}.main(args); }\n}\n`;
+  return src;
+}
+
+function javaConsent() {
+  try { if (localStorage.getItem("snail:java-ok") === "1") return true; } catch {}
+  const ok = confirm("Java can't run inside this app.\n\nTo run it, the code in your java block is sent over the internet to a free public service (" +
+                     JAVA_SERVICE + "), which compiles and runs it.\n\nDon't do this with code that contains secrets. Allow it?");
+  if (ok) { try { localStorage.setItem("snail:java-ok", "1"); } catch {} }
+  return ok;
+}
+
+async function runJavaOnline(code) {
+  if (!javaConsent()) return { ok: false, out: "Java not run: you chose not to send code to the online service." };
+  log("  sending to the online Java service...", "dim");
+  try {
+    const langs = await (await fetch(JAVA_SERVICE + "/languages")).json();
+    const lang = langs.find((l) => /^Java \(/.test(l.name));
+    if (!lang) throw new Error("the service doesn't offer Java right now");
+    const post = await fetch(JAVA_SERVICE + "/submissions?base64_encoded=true", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ language_id: lang.id, source_code: b64(javaSource(code)) }),
+    });
+    if (post.status === 429) return { ok: false, out: "The free Java service is rate-limiting you. Wait a minute and try again." };
+    if (!post.ok) throw new Error("HTTP " + post.status);
+    const { token } = await post.json();
+    for (let i = 0; i < 40; i++) {
+      await new Promise((r) => setTimeout(r, 800));
+      const res = await (await fetch(`${JAVA_SERVICE}/submissions/${token}?base64_encoded=true`)).json();
+      if (res.status && res.status.id > 2) {
+        const ok = res.status.id === 3;
+        let out = unb64(res.compile_output) + unb64(res.stdout) + unb64(res.stderr) + unb64(res.message);
+        if (!ok) out += `\n(${res.status.description})`;
+        return { ok, out };
+      }
+    }
+    return { ok: false, out: "The online Java service took too long to answer." };
+  } catch (e) {
+    return { ok: false, out: `Couldn't reach the online Java service (${JAVA_SERVICE}): ${(e && e.message) || e}\nIt may be offline, busy, or blocking this page. Java always works in the Windows app.` };
   }
 }
 
@@ -109,39 +213,68 @@ $("run").onclick = async () => {
   for (let i = 0; i < p.blocks.length; i++) {
     const b = p.blocks[i], n = i + 1;
     log(`[block ${n}] running ${b.lang}`);
-    let r = { ok: true, out: "" };
+    let r;
     if (b.lang === "html") {
       const f = document.createElement("iframe");
       f.setAttribute("sandbox", "allow-scripts");
-      f.srcdoc = Snail.htmlPage(b, fname);
+      f.srcdoc = Snail.htmlPage(b, getName());
       $("preview").append(f);
-      r.out = "  shown below";
+      r = { ok: true, out: "  shown below" };
     } else if (b.lang === "js" || b.lang === "javascript") {
       r = Snail.runJs(b.body);
     } else if (window.snailNative) {
-      r = await window.snailNative.run(b.lang, b.body, n);
+      r = await window.snailNative.run(b.lang, b.body, n);   // Windows: java, python
+    } else if (b.lang === "python" || b.lang === "py") {
+      if (!pyodidePromise) log("  starting Python (the first run takes a few seconds)...", "dim");
+      r = await runPy(b.body);                                // Android: bundled Pyodide
+    } else if (b.lang === "java") {
+      r = await runJavaOnline(b.body);                        // web + Android: online service
     } else {
-      r = { ok: false, out: `'${b.lang}' blocks can't run on this device. Only html and js work on Android; use the Windows app for more.` };
+      r = { ok: false, out: `'${b.lang}' blocks can't run here. This app runs html, js, python and java.` };
     }
     if (r.out) log(r.out.replace(/\n$/, ""), r.ok ? "" : "err");
     if (!r.ok) { log(`stopped: block ${n} (line ${b.line}) failed`, "err"); return; }
   }
 };
 
+// ---- Open / Save ----
 $("open").onclick = () => $("file").click();
 $("file").onchange = async (e) => {
   const f = e.target.files[0];
   if (f) load(f.name, await f.text());
   e.target.value = "";
 };
-src.addEventListener("input", save);
+
+$("save").onclick = async () => {
+  let name = getName().replace(/[\\/:*?"<>|]/g, "_");
+  if (!/\.(snail|cofigsnail|configsnail)$/i.test(name)) name += ".snail";
+  nameEl.value = name; persist();
+  try {
+    const cap = window.Capacitor;
+    if (cap && cap.isNativePlatform && cap.isNativePlatform()) {
+      // Android: write the file, then open the share sheet (Files, Drive, email...)
+      const { Filesystem, Share } = cap.Plugins;
+      const r = await Filesystem.writeFile({ path: name, data: src.value, directory: "CACHE", encoding: "utf8" });
+      await Share.share({ title: name, files: [r.uri], dialogTitle: "Save " + name });
+    } else {
+      // Windows: the normal "Save as" dialog
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(new Blob([src.value], { type: "text/plain" }));
+      a.download = name;
+      document.body.append(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+    }
+  } catch (e) { log("save failed: " + ((e && e.message) || e), "err"); }
+};
+
+src.addEventListener("input", persist);
+nameEl.addEventListener("change", persist);
 if (window.snailNative) window.snailNative.onOpen((f) => load(f.name, f.text));
 
 try {
-  fname = localStorage.getItem("snail:name") || fname;
+  nameEl.value = localStorage.getItem("snail:name") || nameEl.value;
   src.value = localStorage.getItem("snail:src") ?? SAMPLE;
 } catch { src.value = SAMPLE; }
-$("fname").textContent = fname;
 </script>
 </body>
 </html>

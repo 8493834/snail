@@ -36,6 +36,10 @@ jobs:
       - run: npm install
         env:
           ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+      - name: Bundle the Python runtime (Pyodide) into the app
+        run: |
+          cp -r node_modules/pyodide www/pyodide
+          test -f www/pyodide/pyodide.js || { echo "MISSING: pyodide.js"; exit 1; }
       - run: npx cap add android
       - run: ./gradlew assembleDebug --no-daemon
         working-directory: android
