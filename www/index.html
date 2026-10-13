@@ -7,6 +7,7 @@
 <style>
   :root { --bg:#14171c; --panel:#1d2229; --line:#2c3440; --fg:#e6e9ee; --dim:#8b95a3; --accent:#6fcf97; --err:#ff7b72; }
   * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
   html, body { height: 100%; margin: 0; }
   body { display: flex; flex-direction: column; background: var(--bg); color: var(--fg);
          font: 15px system-ui, sans-serif;
@@ -18,15 +19,21 @@
   button { background: var(--panel); color: var(--fg); border: 1px solid var(--line);
            border-radius: 8px; padding: 8px 14px; font: inherit; cursor: pointer; }
   button.run { background: var(--accent); color: #0b1a10; border: 0; font-weight: 600; }
+  button.run.stop { background: var(--err); color: #1a0b0a; }
   main { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 8px; padding: 0 12px 12px; }
   textarea, pre { width: 100%; margin: 0; padding: 10px; background: var(--panel); color: var(--fg);
                   border: 1px solid var(--line); border-radius: 8px; font: 13px ui-monospace, Consolas, monospace; }
   textarea { height: 42vh; min-height: 140px; resize: none; white-space: pre; tab-size: 2; }
-  pre { min-height: 90px; white-space: pre-wrap; }
+  pre { min-height: 90px; white-space: pre-wrap; word-break: break-word; }
+  #stdin { display: flex; align-items: center; gap: 8px; }
+  #stdin .chev { color: var(--accent); font: 14px ui-monospace, Consolas, monospace; }
+  #stdin-line { flex: 1; min-width: 0; background: var(--panel); color: var(--fg); border: 1px solid var(--accent);
+                border-radius: 8px; padding: 8px 10px; font: 14px ui-monospace, Consolas, monospace; }
   #preview { display: flex; flex-direction: column; gap: 8px; }
   #preview iframe { width: 100%; height: 240px; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
   .err { color: var(--err); }
   .dim { color: var(--dim); }
+  .typed { color: var(--accent); }
 </style>
 </head>
 <body>
@@ -42,13 +49,172 @@
 <main>
   <textarea id="src" spellcheck="false" autocapitalize="off" autocomplete="off"></textarea>
   <pre id="out"></pre>
+  <form id="stdin" hidden>
+    <span class="chev">&gt;</span>
+    <input id="stdin-line" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false"
+           enterkeyhint="send" aria-label="Type input for the program">
+    <button class="run" type="submit">Send</button>
+  </form>
   <div id="preview"></div>
 </main>
+
+<!-- Python runs in a background worker (web + Android + iOS) so Stop always works and the page never freezes.
+     The worker's code is kept here as text and started from a Blob, so no extra file has to be shipped. -->
+<script type="text/plain" id="py-worker">
+"use strict";
+let py = null, waiter = null;
+let pending = "", pendingErr = false, timer = 0, lastFlush = 0;
+const post = (m) => self.postMessage(m);
+
+// Output is sent in small batches so a program that prints a lot can't swamp the page.
+function flush() {
+  if (timer) { clearTimeout(timer); timer = 0; }
+  if (pending) { post({ t: "out", text: pending, err: pendingErr }); pending = ""; }
+  lastFlush = Date.now();
+}
+const KEEP = 400000;   // same as the page's output limit: older text would be thrown away there anyway
+function write(text, err) {
+  if (pending && pendingErr !== err) flush();
+  pending += text; pendingErr = err;
+  if (pending.length > KEEP) pending = pending.slice(-KEEP);   // a runaway loop: keep only the newest text
+  if (Date.now() - lastFlush >= 30) flush();                   // at most ~30 messages a second, however fast it prints
+  else if (!timer) timer = setTimeout(flush, 30);
+}
+
+// Some app webviews serve .wasm files with the wrong type, which makes streaming compilation fail. Fall back to a plain download.
+function installWasmFallback() {
+  if (!WebAssembly.instantiateStreaming) return;
+  const orig = WebAssembly.instantiateStreaming.bind(WebAssembly);
+  WebAssembly.instantiateStreaming = async (source, imports) => {
+    const resp = await source;
+    try { return await orig(resp.clone(), imports); }
+    catch (e) { return WebAssembly.instantiate(await resp.arrayBuffer(), imports); }
+  };
+}
+const withTimeout = (p, ms, msg) =>
+  Promise.race([p, new Promise((_, no) => setTimeout(() => no(new Error(msg)), ms))]);
+
+// What Python's input() and time.sleep() call into (see the py-boot script).
+const snailIO = {
+  read_line() { flush(); post({ t: "need-input" }); return new Promise((resolve) => { waiter = resolve; }); },
+  sleep(seconds) { flush(); return new Promise((resolve) => setTimeout(resolve, Math.max(0, seconds) * 1000)); },
+  flush() { flush(); },
+};
+
+async function init(bases, boot) {
+  installWasmFallback();
+  let lastErr = null;
+  for (let i = 0; i < bases.length && !py; i++) {
+    try {
+      if (i > 0) post({ t: "status", text: "bundled Python not found here; downloading it from the internet instead (needs a connection)..." });
+      importScripts(bases[i] + "pyodide.js");
+      py = await withTimeout(loadPyodide({ indexURL: bases[i] }), 120000, "Python took too long to start");
+    } catch (e) { lastErr = e; py = null; }
+  }
+  if (!py) {
+    throw new Error("couldn't load the Python runtime, either bundled with the app or from " + bases[bases.length - 1] +
+                    ". Check your internet connection." + (lastErr ? " (" + lastErr.message + ")" : ""));
+  }
+  const decOut = new TextDecoder(), decErr = new TextDecoder();
+  py.setStdout({ write(buf) { write(decOut.decode(buf, { stream: true }), false); return buf.length; }, isatty: true });
+  py.setStderr({ write(buf) { write(decErr.decode(buf, { stream: true }), true); return buf.length; }, isatty: true });
+  py.registerJsModule("snail_io", snailIO);
+  py.runPython(boot);
+  post({ t: "ready" });
+}
+
+async function run(code) {
+  const scope = py.globals.get("dict")();   // fresh scope per block, like a separate process
+  scope.set("__name__", "__main__");        // so `if __name__ == "__main__":` works
+  let result;
+  try {
+    await py.runPythonAsync(code, { globals: scope });
+    result = { t: "done", ok: true };
+  } catch (e) {
+    if (e && e.type === "SystemExit") result = { t: "done", ok: true };   // sys.exit() / exit() is a normal ending
+    else result = { t: "done", ok: false, error: String((e && e.message) || e).trim() };
+  } finally { scope.destroy(); }
+  try { py.runPython("import sys\nsys.stdout.flush()\nsys.stderr.flush()"); } catch (e) {}
+  flush();
+  post(result);
+}
+
+self.onmessage = async (e) => {
+  const m = e.data;
+  try {
+    if (m.t === "init") await init(m.bases, m.boot);
+    else if (m.t === "run") await run(m.code);
+    else if (m.t === "line") { const w = waiter; waiter = null; if (w) w(m.text); }
+  } catch (err) { post({ t: "fatal", text: String((err && err.message) || err) }); }
+};
+</script>
+
+<!-- Python side of input() and time.sleep(). They pause the program (JSPI "run_sync") while you type or wait.
+     can_run_sync() only says yes while a program is running, so it is asked each time, not once at start-up. -->
+<script type="text/plain" id="py-boot">
+import sys, time, builtins
+import snail_io
+from pyodide.ffi import run_sync, can_run_sync
+
+def _can_wait():
+    try:
+        return bool(can_run_sync())
+    except Exception:
+        return False
+
+def _read():
+    if not _can_wait():
+        raise RuntimeError("this browser can't pause Python to wait for typing")
+    line = run_sync(snail_io.read_line())
+    if line is None:
+        raise EOFError("EOF when reading a line")
+    return str(line)
+
+def _input(prompt=""):
+    sys.stdout.write(str(prompt))
+    sys.stdout.flush()
+    return _read()
+
+class _Stdin:
+    encoding = "utf-8"
+    def isatty(self):
+        return True
+    def readable(self):
+        return True
+    def readline(self, size=-1):
+        try:
+            return _read() + "\n"
+        except EOFError:
+            return ""
+    def __iter__(self):
+        return self
+    def __next__(self):
+        line = self.readline()
+        if not line:
+            raise StopIteration
+        return line
+
+builtins.input = _input
+sys.stdin = _Stdin()
+
+_real_sleep = time.sleep
+def _sleep(seconds):
+    seconds = float(seconds)
+    if seconds < 0:
+        raise ValueError("sleep length must be non-negative")
+    if _can_wait():
+        snail_io.flush()
+        run_sync(snail_io.sleep(seconds))
+    else:
+        _real_sleep(seconds)
+time.sleep = _sleep
+</script>
 
 <script src="snail-core.js"></script>
 <script>
 const $ = (id) => document.getElementById(id);
 const src = $("src"), out = $("out"), nameEl = $("fname");
+const form = $("stdin"), lineEl = $("stdin-line"), runBtn = $("run"), mainEl = document.querySelector("main");
 const getName = () => nameEl.value.trim() || "untitled.snail";
 
 const SAMPLE = `#ss# copyright snail coding development inc. #
@@ -72,13 +238,58 @@ function persist() {
   try { localStorage.setItem("snail:src", src.value); localStorage.setItem("snail:name", getName()); } catch {}
 }
 function load(name, text) { nameEl.value = name; src.value = text; persist(); }
-function log(text, cls) {
-  const s = document.createElement("span");
-  s.textContent = text + "\n";
-  if (cls) s.className = cls;
-  out.append(s);
+
+// ---- Output. It is streamed, so a program's questions show up while it is still running. ----
+const MAX_OUT = 400000;                   // keep the last ~400k characters so a chatty program can't fill memory
+let atLineStart = true, outLen = 0;
+let recent = "";                          // what the program printed since it last asked a question (pop-up fallback)
+function emit(text, cls) {
+  if (!text) return;
+  const stick = mainEl.scrollHeight - mainEl.scrollTop - mainEl.clientHeight < 48;   // follow the output if already at the bottom
+  const last = out.lastElementChild;
+  if (last && last.className === (cls || "") && last.lastChild && last.lastChild.nodeType === 3) last.lastChild.appendData(text);
+  else {
+    const s = document.createElement("span");
+    s.textContent = text;
+    if (cls) s.className = cls;
+    out.append(s);
+  }
+  atLineStart = text.endsWith("\n");
+  outLen += text.length;
+  while (outLen > MAX_OUT && out.firstChild) {
+    const f = out.firstChild, over = outLen - MAX_OUT, t = f.textContent;
+    if (t.length <= over) { outLen -= t.length; f.remove(); } else { f.textContent = t.slice(over); outLen -= over; }
+  }
+  if (stick) mainEl.scrollTop = mainEl.scrollHeight;
 }
-function reset() { out.textContent = ""; $("preview").textContent = ""; }
+// Program output is collected and drawn at most ~20 times a second, in order. A program that prints
+// non-stop would otherwise keep the page too busy to answer the Stop button.
+let outQ = [], outQLen = 0, outTimer = 0;
+function flushOut() {
+  if (outTimer) { clearTimeout(outTimer); outTimer = 0; }
+  const q = outQ; outQ = []; outQLen = 0;
+  for (let i = 0; i < q.length;) {
+    let t = q[i][0]; const c = q[i][1]; i++;
+    while (i < q.length && q[i][1] === c) t += q[i++][0];
+    emit(t, c);
+  }
+}
+function log(text, cls) {                 // a message from Snail itself, always on its own line
+  flushOut();
+  if (!atLineStart) emit("\n");
+  emit(text + "\n", cls);
+}
+function progOut(text, cls) {             // text from the running program
+  if (!cls) recent = (recent + text).slice(-4000);
+  outQ.push([text, cls || ""]); outQLen += text.length;
+  while (outQLen > MAX_OUT && outQ.length > 1) outQLen -= outQ.shift()[0].length;   // runaway program: keep the newest
+  if (!outTimer) outTimer = setTimeout(flushOut, 50);
+}
+function reset() {
+  if (outTimer) { clearTimeout(outTimer); outTimer = 0; }
+  outQ = []; outQLen = 0;
+  out.textContent = ""; $("preview").textContent = ""; atLineStart = true; outLen = 0; recent = "";
+}
 
 function parseSrc() {
   try { return Snail.parse(src.value, getName()); }
@@ -95,8 +306,106 @@ function summary(p) {
   }
 }
 
+// ---- Typing input for a running program ----
+let running = false, stopRequested = false;
+let waiting = false;                      // the Python worker is waiting for a line (web / Android / iOS)
+let nativeId = null, nativeCount = 0;     // the running process (desktop app)
+
+function showForm(on) {
+  form.hidden = !on;
+  if (on) {
+    lineEl.value = "";
+    lineEl.focus();
+    if (form.scrollIntoView) form.scrollIntoView({ block: "nearest" });
+  }
+}
+form.onsubmit = (e) => {
+  e.preventDefault();
+  const text = lineEl.value;
+  lineEl.value = "";
+  if (waiting && worker) {
+    waiting = false;
+    showForm(false);
+    progOut(text + "\n", "typed");
+    worker.postMessage({ t: "line", text });
+  } else if (nativeId != null && window.snailNative) {
+    progOut(text + "\n", "typed");
+    window.snailNative.stdin(nativeId, text + "\n");
+  }
+};
+function stopRun() {
+  if (!running) return;
+  stopRequested = true;
+  stopWorker();                           // ends Python at once, even in an endless loop
+  flushOut();
+  if (nativeId != null && window.snailNative) window.snailNative.kill(nativeId);
+  showForm(false);
+}
+if (window.snailNative) {
+  window.snailNative.onChunk((m) => { if (m.id === nativeId) progOut(m.text, m.err ? "err" : ""); });
+}
+
 // ---- Python without a PC: Pyodide (Python compiled to WebAssembly). Bundled by the builds; falls back to a CDN ----
-let pyodidePromise;
+const PY_CDN = "https://cdn.jsdelivr.net/pyodide/v0.27.8/full/";   // keep in step with the version in package.json
+const pyBase = () => new URL("pyodide/", location.href).href;       // the copy bundled by the build
+const STOP = "stopped by you";
+// Pausing Python while you type needs "JSPI" (Chrome and Edge 137+, and the matching Android WebView).
+const HAS_JSPI = typeof WebAssembly === "object" && typeof WebAssembly.promising === "function" && typeof WebAssembly.Suspending === "function";
+let useWorker = HAS_JSPI && typeof Worker === "function" && typeof Blob === "function" && !!(window.URL && URL.createObjectURL);
+let pyReady = false;
+
+// -- Worker route (the normal one) --
+let worker = null, ready = null, readyCtl = null, current = null;
+
+function stopWorker() {
+  const w = worker;
+  worker = null; ready = null; waiting = false;
+  if (w) w.terminate();
+  if (readyCtl) { readyCtl.reject(new Error(STOP)); readyCtl = null; }
+  if (current) { const c = current; current = null; c.resolve({ ok: false, out: "", stopped: true }); }
+}
+function workerFailed(text) {             // the worker died or couldn't start
+  if (readyCtl) { readyCtl.reject(new Error(text)); readyCtl = null; }
+  if (current) { const c = current; current = null; c.resolve({ ok: false, out: text }); }
+  stopWorker();
+}
+function ensureWorker() {
+  if (ready) return ready;
+  const url = URL.createObjectURL(new Blob([$("py-worker").textContent], { type: "text/javascript" }));
+  const w = new Worker(url);
+  worker = w;
+  ready = new Promise((resolve, reject) => { readyCtl = { resolve, reject }; });
+  ready.catch(() => {});                  // the caller handles it; this just avoids an "unhandled" warning
+  w.onmessage = (e) => {
+    if (w !== worker) return;             // a worker that was already stopped
+    const m = e.data;
+    if (m.t === "out") progOut(m.text, m.err ? "err" : "");
+    else if (m.t === "status") log("  " + m.text, "dim");
+    else if (m.t === "need-input") { flushOut(); waiting = true; recent = ""; showForm(true); }
+    else if (m.t === "ready") { pyReady = true; URL.revokeObjectURL(url); if (readyCtl) { readyCtl.resolve(); readyCtl = null; } }
+    else if (m.t === "fatal") workerFailed(m.text);
+    else if (m.t === "done") {
+      flushOut(); waiting = false; showForm(false);
+      if (current) { const c = current; current = null; c.resolve({ ok: m.ok, out: m.error || "" }); }
+    }
+  };
+  w.onerror = (e) => { if (w === worker) workerFailed("Python stopped unexpectedly" + (e && e.message ? ": " + e.message : "")); };
+  w.postMessage({ t: "init", bases: [pyBase(), PY_CDN], boot: $("py-boot").textContent });
+  return ready;
+}
+async function runPyWorker(code) {
+  try { await ensureWorker(); }
+  catch (e) {
+    const quiet = stopRequested;
+    stopWorker();
+    return { ok: false, out: quiet ? "" : String((e && e.message) || e) };
+  }
+  if (!worker) return { ok: false, out: "" };
+  return new Promise((resolve) => { current = { resolve }; worker.postMessage({ t: "run", code }); });
+}
+
+// -- Fallback route for browsers without JSPI (older Safari/iOS, Firefox): runs on the page, input() asks in a pop-up box --
+let mainPyPromise;
 function addScript(src) {
   return new Promise((resolve, reject) => {
     const el = document.createElement("script");
@@ -106,10 +415,20 @@ function addScript(src) {
     document.head.append(el);
   });
 }
-const PY_CDN = "https://cdn.jsdelivr.net/pyodide/v0.27.0/full/";
-function loadPy() {
-  if (!pyodidePromise) pyodidePromise = (async () => {
-    let base = new URL("pyodide/", location.href).href;           // the copy bundled by the build
+function installWasmFallback() {          // same safety net as in the worker
+  if (installWasmFallback.done || !WebAssembly.instantiateStreaming) return;
+  installWasmFallback.done = true;
+  const orig = WebAssembly.instantiateStreaming.bind(WebAssembly);
+  WebAssembly.instantiateStreaming = async (source, imports) => {
+    const resp = await source;
+    try { return await orig(resp.clone(), imports); }
+    catch (e) { return WebAssembly.instantiate(await resp.arrayBuffer(), imports); }
+  };
+}
+function loadPyMain() {
+  if (!mainPyPromise) mainPyPromise = (async () => {
+    installWasmFallback();
+    let base = pyBase();
     try { await addScript(base + "pyodide.js"); }
     catch {
       log("  bundled Python not found here; downloading it from the internet instead (needs a connection)...", "dim");
@@ -117,24 +436,49 @@ function loadPy() {
       try { await addScript(base + "pyodide.js"); }
       catch { throw new Error("couldn't load the Python runtime, either bundled with the app or from " + PY_CDN + ". Check your internet connection."); }
     }
-    return loadPyodide({ indexURL: base });
+    const py = await loadPyodide({ indexURL: base });
+    pyReady = true;
+    return py;
   })();
-  pyodidePromise.catch(() => { pyodidePromise = null; });
-  return pyodidePromise;
+  mainPyPromise.catch(() => { mainPyPromise = null; });
+  return mainPyPromise;
 }
-async function runPy(code) {
-  const buf = [];
+function promptLine() {                   // the program asked a question: show what it printed lately in a pop-up
+  flushOut();
+  const shown = recent.split("\n").slice(-12).join("\n").trim() || "Type your input:";
+  recent = "";
+  const ans = window.prompt(shown);
+  if (ans === null) { stopRequested = true; return undefined; }   // Cancel = end the program
+  progOut(ans + "\n", "typed");
+  return ans;
+}
+async function runPyMain(code) {
+  let py;
+  try { py = await loadPyMain(); }
+  catch (e) { return { ok: false, out: String((e && e.message) || e) }; }
+  const dec = new TextDecoder(), decErr = new TextDecoder();
+  py.setStdout({ write: (buf) => { progOut(dec.decode(buf, { stream: true })); return buf.length; }, isatty: true });
+  py.setStderr({ write: (buf) => { progOut(decErr.decode(buf, { stream: true }), "err"); return buf.length; }, isatty: true });
+  py.setStdin({ stdin: promptLine });
+  const scope = py.globals.get("dict")();
+  scope.set("__name__", "__main__");
   try {
-    const py = await loadPy();
-    py.setStdout({ batched: (t) => buf.push(t) });
-    py.setStderr({ batched: (t) => buf.push(t) });
-    const scope = py.globals.get("dict")(); // fresh scope per block, like a separate process
-    try { await py.runPythonAsync(code, { globals: scope }); } finally { scope.destroy(); }
-    return { ok: true, out: buf.join("\n") };
+    await py.runPythonAsync(code, { globals: scope });
+    return { ok: true, out: "" };
   } catch (e) {
-    buf.push(String((e && e.message) || e).trim());
-    return { ok: false, out: buf.join("\n") };
+    if (e && e.type === "SystemExit") return { ok: true, out: "" };
+    if (stopRequested) return { ok: false, out: "" };
+    return { ok: false, out: String((e && e.message) || e).trim() };
+  } finally { scope.destroy(); }
+}
+
+async function runPy(code) {
+  if (!pyReady) log("  starting Python (the first run takes a few seconds)...", "dim");
+  if (useWorker) {
+    try { return await runPyWorker(code); }
+    catch (e) { useWorker = false; }      // the browser wouldn't start a worker; use the fallback instead
   }
+  return runPyMain(code);
 }
 
 // ---- Java without a PC: compiled and run on a free public service (Judge0 CE). Your code is sent to it. ----
@@ -195,45 +539,60 @@ async function runJavaOnline(code) {
     }
     return { ok: false, out: "The online Java service took too long to answer." };
   } catch (e) {
-    return { ok: false, out: `Couldn't reach the online Java service (${JAVA_SERVICE}): ${(e && e.message) || e}\nIt may be offline, busy, or blocking this page. Java always works in the Windows app.` };
+    return { ok: false, out: `Couldn't reach the online Java service (${JAVA_SERVICE}): ${(e && e.message) || e}\nIt may be offline, busy, or blocking this page. Java always works in the desktop app.` };
   }
 }
 
 $("check").onclick = () => {
+  if (running) return;
   reset();
   const p = parseSrc(); if (!p) return;
   summary(p);
   p.blocks.forEach((b, i) => log(`  block ${i + 1}: ${b.lang}${b.extras.length ? " (" + b.extras.join(" ") + ")" : ""}, line ${b.line}, ${b.body.split("\n").length} line(s)`));
 };
 
-$("run").onclick = async () => {
+runBtn.onclick = async () => {
+  if (running) { stopRun(); return; }     // while a program runs, this button is "Stop"
+  running = true; stopRequested = false;
+  runBtn.textContent = "Stop"; runBtn.classList.add("stop");
   reset();
-  const p = parseSrc(); if (!p) return;
-  summary(p);
-  for (let i = 0; i < p.blocks.length; i++) {
-    const b = p.blocks[i], n = i + 1;
-    log(`[block ${n}] running ${b.lang}`);
-    let r;
-    if (b.lang === "html") {
-      const f = document.createElement("iframe");
-      f.setAttribute("sandbox", "allow-scripts");
-      f.srcdoc = Snail.htmlPage(b, getName());
-      $("preview").append(f);
-      r = { ok: true, out: "  shown below" };
-    } else if (b.lang === "js" || b.lang === "javascript") {
-      r = Snail.runJs(b.body);
-    } else if (window.snailNative) {
-      r = await window.snailNative.run(b.lang, b.body, n);   // Windows: java, python
-    } else if (b.lang === "python" || b.lang === "py") {
-      if (!pyodidePromise) log("  starting Python (the first run takes a few seconds)...", "dim");
-      r = await runPy(b.body);                                // Android: bundled Pyodide
-    } else if (b.lang === "java") {
-      r = await runJavaOnline(b.body);                        // web + Android: online service
-    } else {
-      r = { ok: false, out: `'${b.lang}' blocks can't run here. This app runs html, js, python and java.` };
+  try {
+    const p = parseSrc(); if (!p) return;
+    summary(p);
+    for (let i = 0; i < p.blocks.length; i++) {
+      const b = p.blocks[i], n = i + 1;
+      log(`[block ${n}] running ${b.lang}`);
+      let r;
+      if (b.lang === "html") {
+        const f = document.createElement("iframe");
+        f.setAttribute("sandbox", "allow-scripts");
+        f.srcdoc = Snail.htmlPage(b, getName());
+        $("preview").append(f);
+        r = { ok: true, out: "  shown below" };
+      } else if (b.lang === "js" || b.lang === "javascript") {
+        r = Snail.runJs(b.body);
+      } else if (window.snailNative) {
+        nativeId = ++nativeCount;                                // desktop app: java, python as real processes
+        showForm(true);
+        try { r = await window.snailNative.run(b.lang, b.body, n, nativeId); }
+        finally { nativeId = null; showForm(false); }
+      } else if (b.lang === "python" || b.lang === "py") {
+        r = await runPy(b.body);                                  // web + Android + iOS: bundled Pyodide
+      } else if (b.lang === "java") {
+        r = await runJavaOnline(b.body);                          // web + Android + iOS: online service
+      } else {
+        r = { ok: false, out: `'${b.lang}' blocks can't run here. This app runs html, js, python and java.` };
+      }
+      if (stopRequested) { log("[stopped]", "dim"); return; }
+      if (r.out) log(r.out.replace(/\n$/, ""), r.ok ? "" : "err");
+      if (!r.ok) { log(`stopped: block ${n} (line ${b.line}) failed`, "err"); return; }
     }
-    if (r.out) log(r.out.replace(/\n$/, ""), r.ok ? "" : "err");
-    if (!r.ok) { log(`stopped: block ${n} (line ${b.line}) failed`, "err"); return; }
+  } finally {
+    flushOut();
+    running = false;
+    runBtn.textContent = "Run"; runBtn.classList.remove("stop");
+    waiting = false; nativeId = null;
+    showForm(false);
   }
 };
 
@@ -252,12 +611,12 @@ $("save").onclick = async () => {
   try {
     const cap = window.Capacitor;
     if (cap && cap.isNativePlatform && cap.isNativePlatform()) {
-      // Android: write the file, then open the share sheet (Files, Drive, email...)
+      // Android / iOS: write the file, then open the share sheet (Files, Drive, email...)
       const { Filesystem, Share } = cap.Plugins;
       const r = await Filesystem.writeFile({ path: name, data: src.value, directory: "CACHE", encoding: "utf8" });
       await Share.share({ title: name, files: [r.uri], dialogTitle: "Save " + name });
     } else {
-      // Windows: the normal "Save as" dialog
+      // Desktop and web: the normal "Save as" dialog
       const a = document.createElement("a");
       a.href = URL.createObjectURL(new Blob([src.value], { type: "text/plain" }));
       a.download = name;

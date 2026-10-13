@@ -1,6 +1,8 @@
-// Desktop shell (Windows, macOS, Linux): opens the UI and runs java/python blocks with tools installed on the PC.
+// Desktop shell (Windows, macOS, Linux): opens the UI and runs java/python blocks with tools installed on the computer.
+// Programs run as real processes. Their output streams to the window live, and the window's
+// input box is wired to the process's stdin, so input() / Scanner behave like in a terminal.
 const { app, BrowserWindow, ipcMain } = require("electron");
-const { execFile } = require("child_process");
+const { execFile, spawn } = require("child_process");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
@@ -9,6 +11,18 @@ let mainWin = null;
 let pendingFile = null; // macOS "open-file" can arrive before the window exists
 const SNAIL_FILE = /\.(snail|cofigsnail|configsnail)$/i;
 
+const procs = new Map();   // run id -> running child process
+const stopped = new Set(); // run ids the user pressed Stop on
+
+// Stop a process. On Windows the `py` launcher starts python as a child, so kill the whole tree.
+function killProc(child) {
+  if (process.platform === "win32" && child.pid) {
+    try { spawn("taskkill", ["/pid", String(child.pid), "/T", "/F"], { windowsHide: true }).on("error", () => child.kill()); return; } catch {}
+  }
+  child.kill();
+}
+
+// One-shot command with captured output (used for the java compiler).
 function sh(cmd, args, cwd) {
   return new Promise((resolve) =>
     execFile(cmd, args, { cwd, timeout: 60000, windowsHide: true }, (err, stdout, stderr) => {
@@ -19,7 +33,60 @@ function sh(cmd, args, cwd) {
   );
 }
 
-ipcMain.handle("snail:run", async (_e, lang, code, n) => {
+// Interactive run: stream output to the window, accept typed input, no time limit (Stop ends it).
+// `commands` are tried in order until one exists (for example python, then py).
+function runInteractive(sender, id, commands, args, cwd) {
+  return new Promise((resolve) => {
+    const send = (text, err) => {
+      if (!sender.isDestroyed()) sender.send("snail:chunk", { id, text, err: !!err });
+    };
+    const attempt = (i) => {
+      if (i >= commands.length) return resolve({ missing: true });
+      const child = spawn(commands[i], args, {
+        cwd,
+        windowsHide: true,
+        env: { ...process.env, PYTHONUNBUFFERED: "1", PYTHONIOENCODING: "utf-8" },
+      });
+      let started = false;
+      child.once("spawn", () => {
+        started = true;
+        procs.set(id, child);
+      });
+      child.once("error", (err) => {
+        if (started) return send(String(err.message) + "\n", true);
+        if (err.code === "ENOENT") return attempt(i + 1);        // not installed under that name; try the next
+        resolve({ ok: false, out: `couldn't start ${commands[i]}: ${err.message}` });
+      });
+      child.stdin.on("error", () => {});                         // the program already exited
+      child.stdout.setEncoding("utf8");
+      child.stderr.setEncoding("utf8");
+      child.stdout.on("data", (t) => send(t, false));
+      child.stderr.on("data", (t) => send(t, true));
+      child.once("close", (code) => {
+        if (!started) return;
+        procs.delete(id);
+        const wasStopped = stopped.delete(id);
+        resolve({ ok: !wasStopped && code === 0, out: !wasStopped && code ? `(exited with code ${code})` : "", stopped: wasStopped });
+      });
+    };
+    attempt(0);
+  });
+}
+
+ipcMain.on("snail:stdin", (_e, id, text) => {
+  const child = procs.get(id);
+  if (child && !child.stdin.destroyed) child.stdin.write(String(text));
+});
+
+ipcMain.on("snail:kill", (_e, id) => {
+  const child = procs.get(id);
+  if (child) {
+    stopped.add(id);
+    killProc(child);
+  }
+});
+
+ipcMain.handle("snail:run", async (event, lang, code, n, id) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "snail-"));
   try {
     if (lang === "python" || lang === "py") {
@@ -27,25 +94,25 @@ ipcMain.handle("snail:run", async (_e, lang, code, n) => {
       fs.writeFileSync(file, code);
       // Windows: python / py launcher. macOS + Linux: python3 first.
       const tries = process.platform === "win32" ? ["python", "py"] : ["python3", "python"];
-      let r = { missing: true };
-      for (const cmd of tries) { r = await sh(cmd, [file]); if (!r.missing) break; }
+      const r = await runInteractive(event.sender, id, tries, ["-u", file], dir);
       return r.missing ? { ok: false, out: "Python was not found. Install it from python.org." } : r;
     }
     if (lang === "java") {
-      const cls0 = (code.match(/\bpublic\s+(?:final\s+|abstract\s+)*class\s+(\w+)/) ||
-                    code.match(/\bclass\s+(\w+)/) || [])[1];
-      let cls = cls0;
+      let cls = (code.match(/\bpublic\s+(?:final\s+|abstract\s+)*class\s+(\w+)/) ||
+                 code.match(/\bclass\s+(\w+)/) || [])[1];
       let src = code;
-      if (!cls) {
+      if (!cls) {                                  // bare statements: imports go on top, the rest inside main()
         cls = `SnailBlock${n}`;
-        src = `public class ${cls} {\n  public static void main(String[] args) throws Exception {\n${code}\n  }\n}\n`;
+        const lines = code.split("\n"), isImport = (l) => /^\s*import\s/.test(l);
+        src = `${lines.filter(isImport).join("\n")}\npublic class ${cls} {\n  public static void main(String[] args) throws Exception {\n` +
+              `${lines.filter((l) => !isImport(l)).join("\n")}\n  }\n}\n`;
       }
       fs.writeFileSync(path.join(dir, `${cls}.java`), src);
       const compiled = await sh("javac", [`${cls}.java`], dir);
       if (compiled.missing) return { ok: false, out: "Java was not found. Install a JDK (e.g. Temurin 17)." };
       if (!compiled.ok) return compiled;
-      const ran = await sh("java", ["-cp", dir, cls]);
-      return ran.missing ? { ok: false, out: "Java was not found. Install a JDK (e.g. Temurin 17)." } : ran;
+      const r = await runInteractive(event.sender, id, ["java"], ["-cp", dir, cls], dir);
+      return r.missing ? { ok: false, out: "Java was not found. Install a JDK (e.g. Temurin 17)." } : r;
     }
     return { ok: false, out: `no runner for language '${lang}'` };
   } finally {
@@ -90,4 +157,7 @@ app.whenReady().then(() => {
   createWindow();
   app.on("activate", () => { if (!BrowserWindow.getAllWindows().length) createWindow(); });
 });
-app.on("window-all-closed", () => app.quit());
+app.on("window-all-closed", () => {
+  for (const child of procs.values()) killProc(child);
+  app.quit();
+});

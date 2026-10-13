@@ -1,0 +1,29 @@
+#ss# copyright snail coding development inc. #
+#ss# ver 1.0 ###
+
+#ss## A tiny game that uses input().
+Run it, then type your guesses in the box under the output. #
+
+<code lang="python">
+import random
+
+secret = random.randint(1, 20)
+tries = 0
+name = input("What's your name? ")
+print(f"Hi {name}! I'm thinking of a number from 1 to 20.")
+
+while True:
+    guess = input("Your guess: ")
+    if not guess.isdigit():
+        print("Numbers only, please.")
+        continue
+    tries += 1
+    guess = int(guess)
+    if guess < secret:
+        print("Higher!")
+    elif guess > secret:
+        print("Lower!")
+    else:
+        print(f"You got it in {tries} tries!")
+        break
+<code?>
