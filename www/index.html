@@ -319,8 +319,7 @@ function showForm(on) {
     if (form.scrollIntoView) form.scrollIntoView({ block: "nearest" });
   }
 }
-form.onsubmit = (e) => {
-  e.preventDefault();
+function sendLine() {
   const text = lineEl.value;
   lineEl.value = "";
   if (waiting && worker) {
@@ -332,7 +331,12 @@ form.onsubmit = (e) => {
     progOut(text + "\n", "typed");
     window.snailNative.stdin(nativeId, text + "\n");
   }
-};
+}
+form.onsubmit = (e) => { e.preventDefault(); sendLine(); };
+// A preview that isn't allowed to submit forms (Snail running inside Snail) would ignore Enter and Send,
+// so they are also handled directly. preventDefault stops the form from sending the line twice.
+lineEl.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.isComposing) { e.preventDefault(); sendLine(); } });
+form.querySelector("button").addEventListener("click", (e) => { e.preventDefault(); sendLine(); });
 function stopRun() {
   if (!running) return;
   stopRequested = true;
@@ -347,7 +351,7 @@ if (window.snailNative) {
 
 // ---- Python without a PC: Pyodide (Python compiled to WebAssembly). Bundled by the builds; falls back to a CDN ----
 const PY_CDN = "https://cdn.jsdelivr.net/pyodide/v0.27.8/full/";   // keep in step with the version in package.json
-const pyBase = () => new URL("pyodide/", location.href).href;       // the copy bundled by the build
+const pyBase = () => { try { return new URL("pyodide/", location.href).href; } catch { return null; } };   // the copy bundled by the build (none when the page has no real address, e.g. inside a preview)
 const STOP = "stopped by you";
 // Pausing Python while you type needs "JSPI" (Chrome and Edge 137+, and the matching Android WebView).
 const HAS_JSPI = typeof WebAssembly === "object" && typeof WebAssembly.promising === "function" && typeof WebAssembly.Suspending === "function";
@@ -390,7 +394,7 @@ function ensureWorker() {
     }
   };
   w.onerror = (e) => { if (w === worker) workerFailed("Python stopped unexpectedly" + (e && e.message ? ": " + e.message : "")); };
-  w.postMessage({ t: "init", bases: [pyBase(), PY_CDN], boot: $("py-boot").textContent });
+  w.postMessage({ t: "init", bases: [pyBase(), PY_CDN].filter(Boolean), boot: $("py-boot").textContent });
   return ready;
 }
 async function runPyWorker(code) {
@@ -429,7 +433,7 @@ function loadPyMain() {
   if (!mainPyPromise) mainPyPromise = (async () => {
     installWasmFallback();
     let base = pyBase();
-    try { await addScript(base + "pyodide.js"); }
+    try { if (!base) throw new Error("no bundled copy"); await addScript(base + "pyodide.js"); }
     catch {
       log("  bundled Python not found here; downloading it from the internet instead (needs a connection)...", "dim");
       base = PY_CDN;
@@ -565,7 +569,7 @@ runBtn.onclick = async () => {
       let r;
       if (b.lang === "html") {
         const f = document.createElement("iframe");
-        f.setAttribute("sandbox", "allow-scripts");
+        f.setAttribute("sandbox", "allow-scripts allow-downloads allow-modals");
         f.srcdoc = Snail.htmlPage(b, getName());
         $("preview").append(f);
         r = { ok: true, out: "  shown below" };
