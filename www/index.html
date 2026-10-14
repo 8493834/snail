@@ -587,7 +587,7 @@ runBtn.onclick = async () => {
       } else if (b.lang === "java") {
         r = await runJavaOnline(b.body);                          // web + Android + iOS: online service
       } else {
-        r = { ok: false, out: `'${b.lang}' blocks can't run here. This app runs html, js, python and java.` };
+        r = { ok: false, out: `'${b.lang}' blocks can't run here. This app runs html, js, python and java here; sh blocks run in the desktop app and with the snail command.` };
       }
       if (stopRequested) { log("[stopped]", "dim"); return; }
       if (r.out) log(r.out.replace(/\n$/, ""), r.ok ? "" : "err");

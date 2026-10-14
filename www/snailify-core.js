@@ -11,7 +11,7 @@ const Snailify = (function () {
   const RAW_JS_ANY = /String\.raw|RegExp\s*\(/;
   const RAW_JS_RE = /\/(?![/*])[^/\n]*<code\?+>/;
   const RAW_PY = /\b(?:[rR][bBfF]?|[bBfF][rR])["']/;
-  const LANGS = { html: "html en", htm: "html en", js: "js", mjs: "js", py: "python", java: "java" };
+  const LANGS = { html: "html en", htm: "html en", js: "js", mjs: "js", py: "python", java: "java", sh: "sh", bash: "bash" };
 
   const lineOf = (t, i) => t.slice(0, i).split("\n").length;
   const allIdx = (t, re) => [...t.matchAll(new RegExp(re.source, "g"))].map((m) => m.index);

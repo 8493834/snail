@@ -4,7 +4,7 @@
   "description": "The Snail language: parser, Snailify builder and command line tool",
   "main": "index.js",
   "bin": { "snail": "bin/snail.js" },
-  "files": ["index.js", "bin", "lib"],
+  "files": ["index.js", "src-run.js", "bin", "lib"],
   "scripts": { "prepack": "node scripts/copy.js" },
   "license": "UNLICENSED",
   "publishConfig": { "registry": "https://npm.pkg.github.com" }

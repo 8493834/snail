@@ -97,6 +97,16 @@ ipcMain.handle("snail:run", async (event, lang, code, n, id) => {
       const r = await runInteractive(event.sender, id, tries, ["-u", file], dir);
       return r.missing ? { ok: false, out: "Python was not found. Install it from python.org." } : r;
     }
+    if (lang === "sh" || lang === "bash" || lang === "shell") {
+      const file = path.join(dir, `block${n}.sh`);
+      fs.writeFileSync(file, code.replace(/\r\n/g, "\n"));
+      // macOS + Linux: bash (or sh). Windows: needs bash from Git for Windows or WSL.
+      const tries = lang === "sh" && process.platform !== "win32" ? ["sh", "bash"] : ["bash", "sh"];
+      const r = await runInteractive(event.sender, id, tries, [file], dir);
+      return r.missing ? { ok: false, out: process.platform === "win32"
+        ? "bash was not found. Install Git for Windows (it includes bash) or WSL."
+        : "bash/sh was not found on this computer." } : r;
+    }
     if (lang === "java") {
       let cls = (code.match(/\bpublic\s+(?:final\s+|abstract\s+)*class\s+(\w+)/) ||
                  code.match(/\bclass\s+(\w+)/) || [])[1];

@@ -2,11 +2,15 @@
 "use strict";
 const fs = require("fs"), path = require("path");
 const { Snail, build } = (() => { const m = require("../index.js"); return { Snail: m.Snail, build: m.build }; })();
-const USAGE = `snail check FILE.snail
+const USAGE = `snail run FILE.snail [--no-open]
+snail check FILE.snail
 snail build FILE[:lang]... [-o out.snail] [--escape] [--inline] [--note "text"]`;
 const [cmd, ...args] = process.argv.slice(2);
 const die = (m) => { console.error("snail: " + m); process.exit(1); };
-if (cmd === "check") {
+if (cmd === "run") {
+  if (!args[0]) die(USAGE);
+  process.exit(require("../src-run.js")(args[0], !args.includes("--no-open")));
+} else if (cmd === "check") {
   if (!args[0]) die(USAGE);
   let p;
   try { p = Snail.parse(fs.readFileSync(args[0], "utf8"), args[0]); } catch (e) { die(`${args[0]}: ${e.message}`); }

@@ -106,12 +106,12 @@ jobs:
       - run: npx cap sync ios
       - name: Build for the iOS Simulator (no signing needed)
         run: |
-          xcodebuild -project ios/App/App.xcodeproj -scheme App -configuration Debug \
+          xcodebuild -workspace ios/App/App.xcworkspace -scheme App -configuration Debug \
             -sdk iphonesimulator -derivedDataPath build/ios \
             CODE_SIGNING_ALLOWED=NO build
       - name: Package an unsigned .ipa (re-sign it with your Apple ID, e.g. via Sideloadly/AltStore)
         run: |
-          xcodebuild -project ios/App/App.xcodeproj -scheme App -configuration Release \
+          xcodebuild -workspace ios/App/App.xcworkspace -scheme App -configuration Release \
             -sdk iphoneos -derivedDataPath build/ios-device \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" build
           mkdir -p Payload && cp -r build/ios-device/Build/Products/Release-iphoneos/App.app Payload/
@@ -123,9 +123,10 @@ jobs:
             snail-ios-unsigned.ipa
             build/ios/Build/Products/Debug-iphonesimulator/App.app
 
-  # Attaches every app that built to the GitHub Release for this tag (even if one platform failed).
+  # Attaches every app that built to a GitHub Release (even if one platform failed).
+  # Tag v1.2.0 -> release v1.2.0.  Plain push to main -> the rolling pre-release called "latest".
   release:
-    if: startsWith(github.ref, 'refs/tags/v') && !cancelled()
+    if: github.event_name == 'push' && !cancelled()
     needs: [windows, android, linux, macos, ios]
     runs-on: ubuntu-latest
     permissions:
@@ -144,8 +145,14 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release upload "$GITHUB_REF_NAME" release/* --clobber --repo "$GITHUB_REPOSITORY"
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+              gh release upload "$GITHUB_REF_NAME" release/* --clobber --repo "$GITHUB_REPOSITORY"
+            else
+              gh release create "$GITHUB_REF_NAME" release/* --generate-notes --repo "$GITHUB_REPOSITORY"
+            fi
           else
-            gh release create "$GITHUB_REF_NAME" release/* --generate-notes --repo "$GITHUB_REPOSITORY"
+            gh release delete latest --cleanup-tag --yes --repo "$GITHUB_REPOSITORY" || true
+            gh release create latest release/* --prerelease --target "$GITHUB_SHA" \
+              --title "Latest build (main)" --notes "Automatic build of the newest commit." --repo "$GITHUB_REPOSITORY"
           fi
