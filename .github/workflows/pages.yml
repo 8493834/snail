@@ -34,6 +34,19 @@ jobs:
           cp -r www/. _site/
           cp -r node_modules/pyodide _site/pyodide
           touch _site/.nojekyll
+      - name: Check Snailify works (same output as the Python tool)
+        run: |
+          for f in snailify.html snailify-core.js snail-core.js; do
+            test -f "_site/$f" || { echo "MISSING: $f"; exit 1; }
+          done
+          mkdir t && cd t
+          printf 'const s = "%s";\nconsole.log(s);\n' "<code?>" > a.js
+          python3 ../tools/snailify.py a.js --escape -o py.snail
+          node -e '
+            const fs=require("fs"),S=require("../www/snail-core.js"),F=require("../www/snailify-core.js");
+            fs.writeFileSync("js.snail",F.build([{name:"a.js",text:fs.readFileSync("a.js","utf8")}],{escape:true},S).text);'
+          cmp py.snail js.snail && echo "snailify: Python and browser versions agree"
+          cd .. && rm -rf t
       - name: Check the Python runtime made it into the site
         run: |
           ls -la _site/pyodide | head -20

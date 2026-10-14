@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Snailify</title>
+<style>
+  :root { --bg:#14171c; --panel:#1d2229; --line:#2c3440; --fg:#e6e9ee; --dim:#8b95a3; --accent:#6fcf97; --err:#ff7b72; --warn:#e3b341; }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 15px system-ui, sans-serif;
+         padding: env(safe-area-inset-top, 0px) 0 env(safe-area-inset-bottom, 0px); }
+  header, main { max-width: 760px; margin: 0 auto; padding: 10px 12px; }
+  header { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+  h1 { font-size: 18px; margin: 0; }
+  a { color: var(--accent); }
+  .dim { color: var(--dim); font-size: 13px; }
+  button, select, input[type=text] { background: var(--panel); color: var(--fg); border: 1px solid var(--line);
+         border-radius: 8px; padding: 8px 14px; font: inherit; }
+  button { cursor: pointer; }
+  button.go { background: var(--accent); color: #0b1a10; border: 0; font-weight: 600; }
+  .drop { border: 2px dashed var(--line); border-radius: 10px; padding: 18px; text-align: center; color: var(--dim); }
+  .drop.over { border-color: var(--accent); color: var(--fg); }
+  ul { list-style: none; margin: 10px 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+  li { display: flex; align-items: center; gap: 8px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; }
+  li .n { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; font: 13px ui-monospace, Consolas, monospace; }
+  li select, li button { padding: 4px 8px; }
+  .opts { display: flex; flex-wrap: wrap; gap: 14px; align-items: center; margin: 12px 0; }
+  .opts label { display: flex; align-items: center; gap: 6px; }
+  #note { flex: 1 1 14em; min-width: 0; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; margin: 10px 0; }
+  textarea { width: 100%; height: 38vh; min-height: 140px; padding: 10px; resize: vertical; white-space: pre; tab-size: 2;
+             background: var(--panel); color: var(--fg); border: 1px solid var(--line); border-radius: 8px;
+             font: 13px ui-monospace, Consolas, monospace; }
+  .msg { margin: 8px 0; white-space: pre-wrap; word-break: break-word; }
+  .err { color: var(--err); } .ok { color: var(--accent); } .warn { color: var(--warn); }
+</style>
+</head>
+<body>
+<header>
+  <h1>🐌 Snailify</h1>
+  <span class="dim">Turn ordinary files into a <code>.snail</code> program. Runs in your browser; nothing is uploaded.</span>
+  <a href="./">Back to Snail</a>
+</header>
+<main>
+  <div class="drop" id="drop">Drop files here (.html .js .py .java), or <button id="pick" type="button">choose files</button>
+    <input id="files" type="file" multiple hidden></div>
+  <ul id="list"></ul>
+  <div class="opts">
+    <label><input type="checkbox" id="escape"> Escape (rewrite the two things Snail would mangle)</label>
+    <label><input type="checkbox" id="inline"> Inline local &lt;script src&gt; files (add them above too)</label>
+    <input type="text" id="note" placeholder="Note for the top of the file (optional, no # )" spellcheck="false">
+    <input type="text" id="outname" value="my.snail" spellcheck="false" aria-label="Output file name" style="width:10em">
+  </div>
+  <div class="row"><button class="go" id="build" type="button">Make .snail</button></div>
+  <div id="status" class="msg"></div>
+  <div id="result" hidden>
+    <textarea id="text" readonly spellcheck="false"></textarea>
+    <div class="row">
+      <button id="download" type="button">Download</button>
+      <button id="copy" type="button">Copy</button>
+    </div>
+  </div>
+  <p class="dim">Same rules as <code>tools/snailify.py</code>. Python syntax and module scripts aren't syntax-checked here, and
+  hazards inside <code>&lt;style&gt;</code> must be fixed by hand. A warning means the rewrite may have changed what a regex or raw string does.</p>
+</main>
+<script src="snail-core.js"></script>
+<script src="snailify-core.js"></script>
+<script>
+(function () {
+  const $ = (id) => document.getElementById(id);
+  const files = [];                                   // { name, text, lang }
+  const LANG_CHOICES = ["auto", "html", "js", "python", "java"];
+
+  function render() {
+    const ul = $("list"); ul.textContent = "";
+    files.forEach((f, i) => {
+      const li = document.createElement("li");
+      const n = document.createElement("span"); n.className = "n"; n.textContent = f.name;
+      const sel = document.createElement("select");
+      for (const c of LANG_CHOICES) { const o = document.createElement("option"); o.textContent = c; o.value = c; sel.appendChild(o); }
+      sel.value = f.lang || "auto";
+      sel.onchange = () => { f.lang = sel.value === "auto" ? "" : sel.value; };
+      const up = document.createElement("button"); up.textContent = "↑"; up.disabled = i === 0; up.title = "Move up";
+      up.onclick = () => { [files[i - 1], files[i]] = [files[i], files[i - 1]]; render(); };
+      const rm = document.createElement("button"); rm.textContent = "✕"; rm.title = "Remove";
+      rm.onclick = () => { files.splice(i, 1); render(); };
+      li.append(n, sel, up, rm); ul.appendChild(li);
+    });
+  }
+
+  async function add(list) {
+    for (const file of list) {
+      try {
+        const text = new TextDecoder("utf-8", { fatal: true }).decode(await file.arrayBuffer());
+        const at = files.findIndex((f) => f.name === file.name);
+        const entry = { name: file.name, text, lang: "" };
+        if (at >= 0) files[at] = entry; else files.push(entry);
+      } catch (e) { say("err", `${file.name}: not valid UTF-8; re-save it as UTF-8`); return; }
+    }
+    render();
+  }
+
+  function say(cls, msg) { const s = $("status"); s.className = "msg " + cls; s.textContent = msg; }
+
+  $("pick").onclick = () => $("files").click();
+  $("files").onchange = (e) => { add(e.target.files); e.target.value = ""; };
+  const drop = $("drop");
+  drop.ondragover = (e) => { e.preventDefault(); drop.classList.add("over"); };
+  drop.ondragleave = () => drop.classList.remove("over");
+  drop.ondrop = (e) => { e.preventDefault(); drop.classList.remove("over"); add(e.dataTransfer.files); };
+
+  $("build").onclick = () => {
+    $("result").hidden = true;
+    try {
+      const r = Snailify.build(files, { escape: $("escape").checked, inline: $("inline").checked, note: $("note").value.trim() }, Snail);
+      $("text").value = r.text; $("result").hidden = false;
+      let msg = r.report.map((l) => l + "\n").join("");
+      msg += `Made ${r.blocks.length} block(s): ${r.blocks.map((b) => b.lang.split(" ")[0]).join(", ")}. Snail reads every block back exactly.`;
+      if (r.warnings.length) msg += "\n\nCheck these (regex literal, raw string, or something that couldn't be checked here):\n" + r.warnings.map((w) => "  " + w).join("\n");
+      say(r.warnings.length ? "warn" : "ok", msg);
+    } catch (e) { say("err", e.message); }
+  };
+
+  $("download").onclick = () => {
+    let name = $("outname").value.trim() || "my.snail";
+    if (!/\.snail$/i.test(name)) name += ".snail";
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob([$("text").value], { type: "text/plain" }));
+    a.download = name; document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  };
+  $("copy").onclick = async () => {
+    try { await navigator.clipboard.writeText($("text").value); say("ok", "Copied."); }
+    catch (e) { $("text").select(); say("warn", "Couldn't copy automatically; the text is selected, press Ctrl/Cmd+C."); }
+  };
+})();
+</script>
+</body>
+</html>
