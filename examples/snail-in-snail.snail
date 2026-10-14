@@ -47,6 +47,7 @@
   <input id="fname" value="untitled.snail" spellcheck="false" autocapitalize="off" aria-label="File name">
   <button id="open">Open</button>
   <button id="save">Save</button>
+  <button id="build" title="Turn ordinary .html/.js/.py/.java files into a .snail program">Build</button>
   <button id="check">Check</button>
   <button id="run" class="run">Run</button>
   <input id="file" type="file" hidden>
@@ -657,6 +658,7 @@ async function runJavaOnline(code) {
   }
 }
 
+$("build").onclick = () => { persist(); location.href = "snailify.html"; };
 $("check").onclick = () => {
   if (running) return;
   reset();

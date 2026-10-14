@@ -40,7 +40,7 @@
 <header>
   <h1>🐌 Snailify</h1>
   <span class="dim">Turn ordinary files into a <code>.snail</code> program. Runs in your browser; nothing is uploaded.</span>
-  <a href="./">Back to Snail</a>
+  <a href="index.html">Back to Snail</a>
 </header>
 <main>
   <div class="drop" id="drop">Drop files here (.html .js .py .java), or <button id="pick" type="button">choose files</button>
@@ -104,11 +104,11 @@
   function say(cls, msg) { const s = $("status"); s.className = "msg " + cls; s.textContent = msg; }
 
   $("pick").onclick = () => $("files").click();
-  $("files").onchange = (e) => { add(e.target.files); e.target.value = ""; };
+  $("files").onchange = (e) => { add([...e.target.files]); e.target.value = ""; };
   const drop = $("drop");
   drop.ondragover = (e) => { e.preventDefault(); drop.classList.add("over"); };
   drop.ondragleave = () => drop.classList.remove("over");
-  drop.ondrop = (e) => { e.preventDefault(); drop.classList.remove("over"); add(e.dataTransfer.files); };
+  drop.ondrop = (e) => { e.preventDefault(); drop.classList.remove("over"); add([...e.dataTransfer.files]); };
 
   $("build").onclick = () => {
     $("result").hidden = true;

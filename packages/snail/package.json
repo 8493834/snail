@@ -1,0 +1,11 @@
+{
+  "name": "@OWNER/snail",
+  "version": "1.2.0",
+  "description": "The Snail language: parser, Snailify builder and command line tool",
+  "main": "index.js",
+  "bin": { "snail": "bin/snail.js" },
+  "files": ["index.js", "bin", "lib"],
+  "scripts": { "prepack": "node scripts/copy.js" },
+  "license": "UNLICENSED",
+  "publishConfig": { "registry": "https://npm.pkg.github.com" }
+}

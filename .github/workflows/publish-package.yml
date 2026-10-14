@@ -1,0 +1,41 @@
+name: Publish npm package (GitHub Packages)
+
+# Publishes @<your-username>/snail to https://npm.pkg.github.com
+# Runs when you push a tag like v1.2.0, or by hand from the Actions tab.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: https://npm.pkg.github.com
+      - name: Name the package after the repo owner and match the app version
+        working-directory: packages/snail
+        run: |
+          OWNER=$(echo "${{ github.repository_owner }}" | tr 'A-Z' 'a-z')
+          npm pkg set name="@${OWNER}/snail"
+          npm pkg set version="$(node -p "require('../../package.json').version")"
+          npm pkg set repository.url="git+https://github.com/${{ github.repository }}.git"
+      - name: Quick test of the package
+        working-directory: packages/snail
+        run: |
+          node scripts/copy.js
+          printf 'console.log(1);\n' > /tmp/a.js
+          node bin/snail.js build /tmp/a.js -o /tmp/a.snail
+          node bin/snail.js check /tmp/a.snail
+      - name: Publish
+        working-directory: packages/snail
+        run: npm publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
