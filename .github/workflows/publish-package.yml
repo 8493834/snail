@@ -1,5 +1,7 @@
 name: Publish npm package (GitHub Packages)
 
+# Publishes @<your-username>/snail to https://npm.pkg.github.com
+# Runs when you push a tag like v1.2.0, or by hand from the Actions tab.
 on:
   push:
     tags: ["v*"]
@@ -35,14 +37,12 @@ jobs:
           node bin/snail.js check /tmp/a.snail
       - name: Publish
         working-directory: packages/snail
-        run: |
-          # GitHub Packages never lets a version be published twice. If this version is already there, that is fine.
-          if npm publish 2>publish.err; then echo "published"; 
-          elif grep -q "E409\|Cannot publish over existing version" publish.err; then echo "This version is already published - nothing to do. Raise \"version\" in the top package.json to publish a new one."
-          else cat publish.err; exit 1; fi
+        run: npm publish
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+  # Optional: the public npm site. Needs a repository secret called NPM_TOKEN (npm "automation" token).
+  # Anyone can then run: npm install -g snail-lang   (no token, no setup).
   npmjs:
     runs-on: ubuntu-latest
     if: ${{ vars.PUBLISH_TO_NPMJS == 'true' }}
