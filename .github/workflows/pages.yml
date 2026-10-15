@@ -25,6 +25,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
+      - name: Give this build its own version
+        run: node tools/stamp-version.js
       - run: npm install
         env:
           ELECTRON_SKIP_BINARY_DOWNLOAD: "1"

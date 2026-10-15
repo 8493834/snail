@@ -1,7 +1,7 @@
 // Desktop shell (Windows, macOS, Linux): opens the UI and runs java/python blocks with tools installed on the computer.
 // Programs run as real processes. Their output streams to the window live, and the window's
 // input box is wired to the process's stdin, so input() / Scanner behave like in a terminal.
-const { app, BrowserWindow, ipcMain } = require("electron");
+const { app, BrowserWindow, ipcMain, shell } = require("electron");
 const { execFile, spawn } = require("child_process");
 const fs = require("fs");
 const os = require("os");
@@ -155,6 +155,8 @@ function createWindow() {
   });
   mainWin = win;
   win.on("closed", () => { mainWin = null; });
+  // links that point to a web page (like the new-version page) open in the real browser
+  win.webContents.setWindowOpenHandler(({ url }) => { if (/^https:/.test(url)) shell.openExternal(url); return { action: "deny" }; });
   win.loadFile(path.join(__dirname, "..", "www", "index.html"));
 
   // Windows/Linux: double-clicking a .snail file passes its path as an argument.

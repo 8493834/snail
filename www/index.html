@@ -34,9 +34,15 @@
   .err { color: var(--err); }
   .dim { color: var(--dim); }
   .typed { color: var(--accent); }
+  #update { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 8px 12px; background: #3a3320; color: #f2dc9b;
+            border-bottom: 1px solid #5a4d22; font-size: 14px; }
+  #update span { flex: 1 1 14em; }
+  #update a, #update button { background: var(--accent); color: #0b1a10; border: 0; border-radius: 8px; padding: 6px 12px; font: inherit; font-weight: 600; text-decoration: none; cursor: pointer; }
+  #update button.x { background: transparent; color: inherit; padding: 6px 8px; font-weight: 400; }
 </style>
 </head>
 <body>
+<div id="update" hidden role="status"><span id="update-msg"></span><a id="update-go" target="_blank" rel="noopener"></a><button class="x" id="update-x" title="Hide until the next version" type="button">✕</button></div>
 <header>
   <h1>🐌 Snail</h1>
   <input id="fname" value="untitled.snail" spellcheck="false" autocapitalize="off" aria-label="File name">
@@ -211,6 +217,7 @@ def _sleep(seconds):
 time.sleep = _sleep
 </script>
 
+<script src="version.js"></script>
 <script src="snail-core.js"></script>
 <script>
 const $ = (id) => document.getElementById(id);
@@ -631,6 +638,34 @@ $("save").onclick = async () => {
     }
   } catch (e) { log("save failed: " + ((e && e.message) || e), "err"); }
 };
+
+// ---- Update check: tells you when a newer version has been released (asked at most every 6 hours; stays quiet if offline) ----
+(function () {
+  const S = window.SNAIL;
+  if (!S || !S.repo || !/^\d+\.\d+\.\d+/.test(S.version || "")) return;
+  const num = (v) => String(v).replace(/^v/, "").split(".").map((n) => parseInt(n, 10) || 0);
+  const newer = (a, b) => { const x = num(a), y = num(b); for (let i = 0; i < 3; i++) if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) > (y[i] || 0); return false; };
+  const store = { get(k) { try { return localStorage.getItem(k); } catch { return null; } }, set(k, v) { try { localStorage.setItem(k, v); } catch {} } };
+  const native = !!(window.snailNative || (window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()));
+  function show(latest) {
+    if (!newer(latest, S.version) || store.get("snail:upd-hide") === latest) return;
+    const v = String(latest).replace(/^v/, "");
+    $("update-msg").textContent = `Update recommended: Snail ${v} is available (this is ${S.version}).`;
+    const go = $("update-go");
+    if (native) { go.href = `https://github.com/${S.repo}/releases/latest`; go.textContent = "Get the update"; }
+    else { go.href = "#"; go.textContent = "Reload"; go.onclick = (e) => { e.preventDefault(); location.reload(); }; }
+    $("update-x").onclick = () => { store.set("snail:upd-hide", latest); $("update").hidden = true; };
+    $("update").hidden = false;
+  }
+  let cached = null;
+  try { cached = JSON.parse(store.get("snail:upd") || "null"); } catch {}
+  if (cached && cached.repo === S.repo && Date.now() - cached.t < 6 * 3600e3) return show(cached.v);
+  const api = (window.SNAIL_API || "https://api.github.com") + `/repos/${S.repo}/releases/latest`;
+  fetch(api, { headers: { accept: "application/vnd.github+json" } })
+    .then((r) => (r.ok ? r.json() : null))
+    .then((j) => { if (j && j.tag_name) { store.set("snail:upd", JSON.stringify({ t: Date.now(), v: j.tag_name, repo: S.repo })); show(j.tag_name); } })
+    .catch(() => {});
+})();
 
 src.addEventListener("input", persist);
 nameEl.addEventListener("change", persist);

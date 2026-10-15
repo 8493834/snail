@@ -6,7 +6,7 @@
 set -eu
 REPO="${SNAIL_REPO:-8493834/snail}"
 TAG="${SNAIL_TAG:-latest}"
-API="https://api.github.com/repos/$REPO/releases/tags/$TAG"
+if [ "$TAG" = "latest" ]; then API="https://api.github.com/repos/$REPO/releases/latest"; else API="https://api.github.com/repos/$REPO/releases/tags/$TAG"; fi
 say() { printf '%s\n' "$*"; }
 die() { printf 'snail install: %s\n' "$*" >&2; exit 1; }
 

@@ -14,6 +14,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
+      - name: Give this build its own version
+        run: node tools/stamp-version.js
       - run: npm install
       - run: npx electron-builder --win --publish never
         env:
@@ -34,6 +36,8 @@ jobs:
         with:
           distribution: temurin
           java-version: 17
+      - name: Give this build its own version
+        run: node tools/stamp-version.js
       - run: npm install
         env:
           ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
@@ -56,6 +60,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
+      - name: Give this build its own version
+        run: node tools/stamp-version.js
       - run: npm install
       - run: npx electron-builder --linux --publish never
       - uses: actions/upload-artifact@v4
@@ -72,6 +78,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
+      - name: Give this build its own version
+        run: node tools/stamp-version.js
       - run: npm install
       - run: npx electron-builder --mac --publish never
         env:
@@ -90,6 +98,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
+      - name: Give this build its own version
+        run: node tools/stamp-version.js
       - run: npm install
         env:
           ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
@@ -124,7 +134,7 @@ jobs:
             build/ios/Build/Products/Debug-iphonesimulator/App.app
 
   # Attaches every app that built to a GitHub Release (even if one platform failed).
-  # Tag v1.2.0 -> release v1.2.0.  Plain push to main -> the rolling pre-release called "latest".
+  # Every build gets its own version (1.2.<run number>) and its own tag, e.g. v1.2.57, marked as the Latest release.
   release:
     if: github.event_name == 'push' && !cancelled()
     needs: [windows, android, linux, macos, ios]
@@ -139,9 +149,11 @@ jobs:
       - name: Pack the snail command (installable with no token or account)
         run: |
           mkdir -p release
+          VERSION=$(node tools/stamp-version.js)
           cd packages/snail
           npm pkg set name=snail-lang
-          npm pkg set version="$(node -p "require('../../package.json').version")"
+          npm pkg set version="$VERSION"
+          npm pkg set snailRepo="$GITHUB_REPOSITORY"
           npm pack --silent
           cp snail-lang-*.tgz ../../release/snail.tgz
       - uses: actions/download-artifact@v4
@@ -153,18 +165,15 @@ jobs:
           find artifacts -type f \( -name '*.exe' -o -name '*.apk' -o -name '*.AppImage' -o -name '*.deb' -o -name '*.dmg' -o -name '*.zip' -o -name '*.ipa' \) -exec cp {} release/ \;
           ls -l release
           test -n "$(ls -A release)" || { echo "no app files were built"; exit 1; }
-      - name: Create or update the Release
+      - name: Create the Release (every build gets its own version and tag)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
-            if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-              gh release upload "$GITHUB_REF_NAME" release/* --clobber --repo "$GITHUB_REPOSITORY"
-            else
-              gh release create "$GITHUB_REF_NAME" release/* --generate-notes --repo "$GITHUB_REPOSITORY"
-            fi
+          VERSION=$(node tools/stamp-version.js)
+          TAG="v$VERSION"
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$TAG" release/* --clobber --repo "$GITHUB_REPOSITORY"
           else
-            gh release delete latest --cleanup-tag --yes --repo "$GITHUB_REPOSITORY" || true
-            gh release create latest release/* --prerelease --target "$GITHUB_SHA" \
-              --title "Latest build (main)" --notes "Automatic build of the newest commit." --repo "$GITHUB_REPOSITORY"
+            gh release create "$TAG" release/* --target "$GITHUB_SHA" --latest \
+              --title "Snail $VERSION" --generate-notes --repo "$GITHUB_REPOSITORY"
           fi
