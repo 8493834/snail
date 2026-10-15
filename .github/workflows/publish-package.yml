@@ -46,7 +46,8 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   # Optional: the public npm site. Needs a repository secret called NPM_TOKEN (npm "automation" token).
-  # Anyone can then run: npm install -g snail-lang   (no token, no setup).
+  # Anyone can then run: npm install -g <name>   (no token, no setup). The name is the repository variable NPM_PACKAGE_NAME
+  # (for example @yourname/snail), or snail-code if you don't set one.
   npmjs:
     runs-on: ubuntu-latest
     if: ${{ vars.PUBLISH_TO_NPMJS == 'true' }}
@@ -56,12 +57,13 @@ jobs:
         with:
           node-version: 20
           registry-url: https://registry.npmjs.org
-      - name: Publish snail-lang
+      - name: Publish snail-code
         working-directory: packages/snail
         run: |
-          npm pkg set name=snail-lang
+          npm pkg set name="${NPM_PACKAGE_NAME:-snail-code}"
           npm pkg set version="$(node -p "require('../../package.json').version")"
           npm pkg delete publishConfig
           npm publish --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_PACKAGE_NAME: ${{ vars.NPM_PACKAGE_NAME }}
