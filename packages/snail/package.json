@@ -3,9 +3,20 @@
   "version": "1.2.0",
   "description": "The Snail language: parser, Snailify builder and command line tool",
   "main": "index.js",
-  "bin": { "snail": "bin/snail.js" },
-  "files": ["index.js", "src-run.js", "bin", "lib"],
-  "scripts": { "prepack": "node scripts/copy.js" },
+  "bin": {
+    "snail": "bin/snail.js"
+  },
+  "files": [
+    "index.js",
+    "src-run.js",
+    "bin",
+    "lib"
+  ],
+  "scripts": {
+    "prepack": "node -e \"const f=require('fs');f.mkdirSync('lib',{recursive:true});for(const n of ['snail-core.js','snailify-core.js'])f.copyFileSync('../../www/'+n,'lib/'+n)\""
+  },
   "license": "UNLICENSED",
-  "publishConfig": { "registry": "https://npm.pkg.github.com" }
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com"
+  }
 }

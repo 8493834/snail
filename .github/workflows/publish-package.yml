@@ -30,7 +30,8 @@ jobs:
       - name: Quick test of the package
         working-directory: packages/snail
         run: |
-          node scripts/copy.js
+          mkdir -p lib && cp ../../www/snail-core.js ../../www/snailify-core.js lib/
+          ls -R . | head -30
           printf 'console.log(1);\n' > /tmp/a.js
           node bin/snail.js build /tmp/a.js -o /tmp/a.snail
           node bin/snail.js check /tmp/a.snail
