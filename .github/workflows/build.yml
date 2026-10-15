@@ -132,12 +132,24 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Pack the snail command (installable with no token or account)
+        run: |
+          mkdir -p release
+          cd packages/snail
+          npm pkg set name=snail-lang
+          npm pkg set version="$(node -p "require('../../package.json').version")"
+          npm pack --silent
+          cp snail-lang-*.tgz ../../release/snail.tgz
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
       - name: Collect the app files
         run: |
-          mkdir release
+          mkdir -p release
           find artifacts -type f \( -name '*.exe' -o -name '*.apk' -o -name '*.AppImage' -o -name '*.deb' -o -name '*.dmg' -o -name '*.zip' -o -name '*.ipa' \) -exec cp {} release/ \;
           ls -l release
           test -n "$(ls -A release)" || { echo "no app files were built"; exit 1; }
