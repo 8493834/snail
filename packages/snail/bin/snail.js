@@ -4,10 +4,14 @@ const fs = require("fs"), path = require("path");
 const { Snail, build } = (() => { const m = require("../index.js"); return { Snail: m.Snail, build: m.build }; })();
 const USAGE = `snail run FILE.snail [--no-open]
 snail check FILE.snail
+sudo snail install-app          (installs the desktop app from the newest Release)
 snail build FILE[:lang]... [-o out.snail] [--escape] [--inline] [--note "text"]`;
 const [cmd, ...args] = process.argv.slice(2);
 const die = (m) => { console.error("snail: " + m); process.exit(1); };
-if (cmd === "run") {
+if (cmd === "install-app") {
+  const r = require("child_process").spawnSync("sh", [path.join(__dirname, "..", "install.sh")], { stdio: "inherit" });
+  process.exit(r.status === null ? 1 : r.status);
+} else if (cmd === "run") {
   if (!args[0]) die(USAGE);
   process.exit(require("../src-run.js")(args[0], !args.includes("--no-open")));
 } else if (cmd === "check") {

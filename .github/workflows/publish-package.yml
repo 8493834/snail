@@ -37,7 +37,11 @@ jobs:
           node bin/snail.js check /tmp/a.snail
       - name: Publish
         working-directory: packages/snail
-        run: npm publish
+        run: |
+          # GitHub Packages never lets a version be published twice. If this version is already there, that is fine.
+          if npm publish 2>publish.err; then echo "published"; 
+          elif grep -q "E409\|Cannot publish over existing version" publish.err; then echo "This version is already published - nothing to do. Raise \"version\" in the top package.json to publish a new one."
+          else cat publish.err; exit 1; fi
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

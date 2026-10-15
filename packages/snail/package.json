@@ -7,13 +7,14 @@
     "snail": "bin/snail.js"
   },
   "files": [
-    "index.js",
-    "src-run.js",
     "bin",
-    "lib"
+    "index.js",
+    "install.sh",
+    "lib",
+    "src-run.js"
   ],
   "scripts": {
-    "prepack": "node -e \"const f=require('fs');f.mkdirSync('lib',{recursive:true});for(const n of ['snail-core.js','snailify-core.js'])f.copyFileSync('../../www/'+n,'lib/'+n)\""
+    "prepack": "node -e \"const f=require('fs');f.mkdirSync('lib',{recursive:true});for(const n of ['snail-core.js','snailify-core.js'])f.copyFileSync('../../www/'+n,'lib/'+n);f.copyFileSync('../../install.sh','install.sh')\""
   },
   "license": "UNLICENSED",
   "publishConfig": {
