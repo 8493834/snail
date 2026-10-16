@@ -1,10 +1,10 @@
 {
   "name": "snail-app",
-  "version": "1.2.25",
+  "version": "1.2.27",
   "description": "Runner for the Snail programming language",
   "author": {
-    "name": "Snail Coding Development",
-    "email": "noreply@snailcoding.invalid"
+    "name": "8493834, Snail Coding Development and joshua coding inc.",
+    "email": "support.simulator.jo.kitma@gmail.com"
   },
   "main": "electron/main.js",
   "scripts": {
