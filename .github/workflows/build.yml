@@ -165,6 +165,8 @@ jobs:
           find artifacts -type f \( -name '*.exe' -o -name '*.apk' -o -name '*.AppImage' -o -name '*.deb' -o -name '*.dmg' -o -name '*.zip' -o -name '*.ipa' \) -exec cp {} release/ \;
           ls -l release
           test -n "$(ls -A release)" || { echo "no app files were built"; exit 1; }
+      - name: Make the .deb installable with apt (sudo apt install snail-code)
+        run: sh tools/make-apt-repo.sh release && ls -l release
       - name: Create the Release (every build gets its own version and tag)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

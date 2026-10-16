@@ -32,6 +32,19 @@ Linux)
       command -v sudo >/dev/null 2>&1 || die "run this as root (or install sudo)"
       SUDO="sudo"
     fi
+    LIST="${SNAIL_APT_LIST:-/etc/apt/sources.list.d/snail-code.list}"
+    if [ "$TAG" = "latest" ]; then
+      # best: add Snail as an apt source, so  sudo apt install snail-code  and  sudo apt upgrade  work from now on
+      say "Adding Snail to apt ($LIST)"
+      printf 'deb [trusted=yes] https://github.com/%s/releases/latest/download ./\n' "$REPO" | $SUDO tee "$LIST" >/dev/null
+      if $SUDO apt-get update -o Dir::Etc::sourcelist="$LIST" -o Dir::Etc::sourceparts=- -o APT::Get::List-Cleanup=0 >/dev/null 2>&1 \
+         && $SUDO apt-get install -y snail-code; then
+        say "Installed. Start it from your app menu. Update later with:  sudo apt update && sudo apt upgrade"
+        exit 0
+      fi
+      say "The apt route didn't work; downloading the .deb directly instead."
+      $SUDO rm -f "$LIST"
+    fi
     say "Downloading $DEB"
     curl -fL --progress-bar -o "$TMP/snail.deb" "$DEB"
     chmod 644 "$TMP/snail.deb"
